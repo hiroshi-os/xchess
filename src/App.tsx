@@ -235,11 +235,17 @@ export default function App() {
             <ChessBoard
               board={game.chess.board()}
               orientation={boardOrientation}
+              turn={game.turn}
+              userColor={game.userColor}
+              gameMode={game.gameMode}
               selectedSquare={game.selectedSquare}
               legalMoves={game.legalMoves}
               lastMove={game.lastMove}
               checkedKingSquare={game.checkedKingSquare}
+              premove={game.premove}
               onSquareClick={game.handleSquareClick}
+              onMoveAttempt={game.handleMoveAttempt}
+              onCancelPremove={game.cancelPremove}
               disabled={!!game.gameResult}
             />
 

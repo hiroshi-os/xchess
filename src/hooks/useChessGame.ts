@@ -32,6 +32,7 @@ export function useChessGame({
   const [legalMoves, setLegalMoves] = useState<Square[]>([])
   const [lastMove, setLastMove] = useState<{ from: Square; to: Square } | null>(null)
   const [pendingPromotion, setPendingPromotion] = useState<{ from: Square; to: Square } | null>(null)
+  const [premove, setPremove] = useState<{ from: Square; to: Square } | null>(null)
 
   // History & Evaluation
   const [moveHistory, setMoveHistory] = useState<MoveRecord[]>([])
@@ -276,47 +277,109 @@ export function useChessGame({
     }
   }, [botDifficulty, chess, currentTurn, executeMove, gameMode, gameResult, userColor])
 
-  // Square Click handler
+  // Auto-execute Premove when turn becomes userColor
+  useEffect(() => {
+    if (premove && chess.turn() === userColor && !chess.isGameOver() && !gameResult) {
+      const legals = chess.moves({ square: premove.from, verbose: true })
+      const matching = legals.find((m) => m.to === premove.to)
+      if (matching) {
+        executeMove(premove.from, premove.to, (matching.promotion as PieceSymbol) || "q")
+      }
+      setPremove(null)
+    }
+  }, [chess, executeMove, fen, gameResult, premove, userColor])
+
+  // Move Attempt (used for Drag & Drop and Instant Moves)
+  const handleMoveAttempt = useCallback(
+    (from: Square, to: Square) => {
+      if (gameResult) return
+
+      const piece = chess.get(from)
+      if (!piece) return
+
+      // If it's user's turn (or pass and play)
+      if (gameMode === "pass-and-play" || chess.turn() === userColor) {
+        const moves = chess.moves({ square: from, verbose: true })
+        const move = moves.find((m) => m.to === to)
+        if (move) {
+          // Pawn Promotion Check
+          if (
+            piece.type === "p" &&
+            ((piece.color === "w" && to[1] === "8") ||
+              (piece.color === "b" && to[1] === "1"))
+          ) {
+            setPendingPromotion({ from, to })
+            return
+          }
+          executeMove(from, to)
+          return
+        }
+      } else {
+        // It's opponent's turn -> Pre-drag / Premove!
+        if (piece.color === userColor && from !== to) {
+          setPremove({ from, to })
+          setSelectedSquare(null)
+          setLegalMoves([])
+        }
+      }
+    },
+    [chess, executeMove, gameMode, gameResult, userColor]
+  )
+
+  // Square Click handler (Click-to-Move)
   const handleSquareClick = useCallback(
     (square: Square) => {
       if (gameResult) return
 
-      // In vs-computer, lock user to userColor
+      // If clicking with a premove active, cancel premove unless clicking target
+      if (premove) {
+        setPremove(null)
+      }
+
+      // If it's opponent's turn, allow selecting own piece for premove
       if (gameMode === "vs-computer" && chess.turn() !== userColor) {
+        const piece = chess.get(square)
+        if (piece && piece.color === userColor) {
+          if (selectedSquare === square) {
+            setSelectedSquare(null)
+            setLegalMoves([])
+          } else {
+            setSelectedSquare(square)
+            // Generate pseudo-legal destination indicators
+            const allSquares: Square[] = []
+            const files = ["a", "b", "c", "d", "e", "f", "g", "h"]
+            for (let r = 1; r <= 8; r++) {
+              for (const f of files) {
+                const sq = `${f}${r}` as Square
+                if (sq !== square) allSquares.push(sq)
+              }
+            }
+            setLegalMoves(allSquares)
+          }
+        } else if (selectedSquare) {
+          // Queue premove
+          handleMoveAttempt(selectedSquare, square)
+        }
         return
       }
 
-      // If a square is already selected
+      // If a square is already selected on our turn
       if (selectedSquare) {
-        // If clicking on same square, deselect
         if (selectedSquare === square) {
           setSelectedSquare(null)
           setLegalMoves([])
           return
         }
 
-        // Check if destination is a legal move
         if (legalMoves.includes(square)) {
-          // Check for Pawn Promotion (White to 8th rank, Black to 1st rank)
-          const piece = chess.get(selectedSquare)
-          if (
-            piece &&
-            piece.type === "p" &&
-            ((piece.color === "w" && square[1] === "8") ||
-              (piece.color === "b" && square[1] === "1"))
-          ) {
-            setPendingPromotion({ from: selectedSquare, to: square })
-            return
-          }
-
-          executeMove(selectedSquare, square)
+          handleMoveAttempt(selectedSquare, square)
           return
         }
       }
 
-      // Check if clicking own piece
+      // Check if clicking own piece on our turn
       const piece = chess.get(square)
-      if (piece && piece.color === chess.turn()) {
+      if (piece && (gameMode === "pass-and-play" || piece.color === chess.turn())) {
         setSelectedSquare(square)
         const moves = chess.moves({ square, verbose: true })
         setLegalMoves(moves.map((m) => m.to as Square))
@@ -325,8 +388,15 @@ export function useChessGame({
         setLegalMoves([])
       }
     },
-    [chess, executeMove, gameMode, gameResult, legalMoves, selectedSquare, userColor]
+    [chess, gameMode, gameResult, handleMoveAttempt, legalMoves, premove, selectedSquare, userColor]
   )
+
+  // Cancel Premove
+  const cancelPremove = useCallback(() => {
+    setPremove(null)
+    setSelectedSquare(null)
+    setLegalMoves([])
+  }, [])
 
   // Promotion choice
   const confirmPromotion = useCallback(
@@ -377,6 +447,7 @@ export function useChessGame({
       setLegalMoves([])
       setLastMove(null)
       setPendingPromotion(null)
+      setPremove(null)
       setMoveHistory([])
       setCurrentHistoryIndex(-1)
       setEvalScore(0)
@@ -402,6 +473,7 @@ export function useChessGame({
     legalMoves,
     lastMove,
     pendingPromotion,
+    premove,
     moveHistory,
     currentHistoryIndex,
     evalScore,
@@ -417,6 +489,8 @@ export function useChessGame({
     setBotDifficulty,
     setUserColor,
     handleSquareClick,
+    handleMoveAttempt,
+    cancelPremove,
     executeMove,
     confirmPromotion,
     cancelPromotion,
