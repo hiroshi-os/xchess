@@ -60,7 +60,7 @@ export const GameControls: React.FC<GameControlsProps> = ({
   return (
     <div className="flex flex-col gap-3.5 w-full">
       {/* Turn & Status Banner */}
-      <div className="flex items-center justify-between px-3.5 py-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60">
+      <div className="flex items-center justify-between px-3.5 h-11 rounded-lg border border-zinc-800 bg-zinc-900/60 shrink-0">
         <div className="flex items-center gap-2">
           <div
             className={`size-3 rounded-full border border-zinc-500 ${

@@ -17,7 +17,7 @@ export const CapturedPieces: React.FC<CapturedPiecesProps> = ({
   const capturedPieceColor: Color = color === "w" ? "b" : "w"
 
   return (
-    <div className="flex items-center gap-1 min-h-[22px] px-1">
+    <div className="flex items-center gap-1 h-6 px-1 overflow-hidden select-none">
       <div className="flex items-center -space-x-1 overflow-x-auto">
         {pieces.map((pieceType, idx) => (
           <div key={`${pieceType}-${idx}`} className="size-4 shrink-0 opacity-80 hover:opacity-100 transition-opacity">
@@ -26,7 +26,7 @@ export const CapturedPieces: React.FC<CapturedPiecesProps> = ({
         ))}
       </div>
       {advantage > 0 && (
-        <span className="text-[11px] font-mono font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-1 py-0.2 rounded ml-1">
+        <span className="text-[11px] font-mono font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-1 py-0.2 rounded ml-1 shrink-0">
           +{advantage}
         </span>
       )}
