@@ -1,4 +1,4 @@
-import { Chess, type Move, type PieceSymbol } from "chess.js"
+import { Chess, type Move, type PieceSymbol, type Square } from "chess.js"
 import type { BotConfig, BotDifficulty } from "@/types/chess"
 
 export const BOT_CONFIGS: Record<BotDifficulty, BotConfig> = {
@@ -43,7 +43,6 @@ const PIECE_VALUES: Record<PieceSymbol, number> = {
 }
 
 // Piece-Square Tables (White perspective, flipped for black)
-// High values encourage central control, piece development, king safety
 const PAWN_PST: number[] = [
   0,  0,  0,  0,  0,  0,  0,  0,
   50, 50, 50, 50, 50, 50, 50, 50,
@@ -111,7 +110,6 @@ const KING_MIDGAME_PST: number[] = [
 ]
 
 function getPieceSquareValue(piece: PieceSymbol, squareIndex: number, isWhite: boolean): number {
-  // If black, mirror row index
   const index = isWhite ? squareIndex : (7 - Math.floor(squareIndex / 8)) * 8 + (squareIndex % 8)
 
   switch (piece) {
@@ -168,7 +166,6 @@ export function evaluateBoard(game: Chess): number {
   return score
 }
 
-// Order moves to optimize alpha-beta pruning (captures and promotions first)
 function orderMoves(moves: Move[]): Move[] {
   return moves.sort((a, b) => {
     let scoreA = 0
@@ -192,7 +189,6 @@ function orderMoves(moves: Move[]): Move[] {
   })
 }
 
-// Quiescence search for unstable capture positions
 function quiescence(game: Chess, alpha: number, beta: number, maxDepth: number = 2): number {
   const standPat = evaluateBoard(game)
   const isWhite = game.turn() === "w"
@@ -207,7 +203,6 @@ function quiescence(game: Chess, alpha: number, beta: number, maxDepth: number =
     if (beta > standPat) beta = standPat
   }
 
-  // Only examine captures in quiescence
   const captureMoves = game.moves({ verbose: true }).filter((m) => !!m.captured)
   const ordered = orderMoves(captureMoves)
 
@@ -228,7 +223,6 @@ function quiescence(game: Chess, alpha: number, beta: number, maxDepth: number =
   return isWhite ? alpha : beta
 }
 
-// Alpha-Beta Minimax
 function minimax(
   game: Chess,
   depth: number,
@@ -267,9 +261,6 @@ function minimax(
   }
 }
 
-/**
- * Finds the optimal move for the current position given difficulty level
- */
 export async function getBestBotMove(
   game: Chess,
   difficulty: BotDifficulty
@@ -277,12 +268,10 @@ export async function getBestBotMove(
   const moves = game.moves({ verbose: true })
   if (moves.length === 0) return null
 
-  // Add realistic human calculation delay (400ms - 800ms)
-  await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 350) + 400))
+  await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 300) + 300))
 
   const isWhite = game.turn() === "w"
 
-  // Level 1: Beginner with 35% chance of random move, otherwise shallow eval
   if (difficulty === 1) {
     if (Math.random() < 0.35) {
       return moves[Math.floor(Math.random() * moves.length)]
@@ -319,4 +308,53 @@ export async function getBestBotMove(
   }
 
   return bestMove || moves[0]
+}
+
+export interface AnalysisLine {
+  san: string
+  from: Square
+  to: Square
+  score: number // in centipawns
+  evalText: string
+  depth: number
+}
+
+/**
+ * Calculates the top recommended moves for the current position in Analysis Mode
+ */
+export function getTopAnalysisLines(game: Chess, count: number = 3): AnalysisLine[] {
+  const moves = game.moves({ verbose: true })
+  if (moves.length === 0) return []
+
+  const isWhite = game.turn() === "w"
+  const lines: AnalysisLine[] = []
+
+  for (const move of moves) {
+    game.move(move)
+    // Evaluate 1-ply deeper with minimax
+    const score = minimax(game, 1, -Infinity, Infinity, !isWhite)
+    game.undo()
+
+    const pawns = score / 100
+    const evalText =
+      Math.abs(pawns) >= 50
+        ? pawns > 0
+          ? "+M"
+          : "-M"
+        : pawns > 0
+        ? `+${pawns.toFixed(1)}`
+        : pawns.toFixed(1)
+
+    lines.push({
+      san: move.san,
+      from: move.from as Square,
+      to: move.to as Square,
+      score,
+      evalText,
+      depth: 2,
+    })
+  }
+
+  lines.sort((a, b) => (isWhite ? b.score - a.score : a.score - b.score))
+  return lines.slice(0, count)
 }

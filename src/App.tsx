@@ -5,11 +5,13 @@ import { GameClock } from "@/components/chess/GameClock"
 import { CapturedPieces } from "@/components/chess/CapturedPieces"
 import { MoveHistory } from "@/components/chess/MoveHistory"
 import { GameControls } from "@/components/chess/GameControls"
+import { AnalysisPanel } from "@/components/chess/AnalysisPanel"
 import { EvalBar } from "@/components/chess/EvalBar"
 import { PromotionDialog } from "@/components/chess/PromotionDialog"
 import { NicknameModal } from "@/components/modals/NicknameModal"
 import { GameOverModal } from "@/components/modals/GameOverModal"
 import { OnlineRoomModal } from "@/components/modals/OnlineRoomModal"
+import { LoadPositionModal } from "@/components/modals/LoadPositionModal"
 import { useChessGame } from "@/hooks/useChessGame"
 import { usePeerConnection } from "@/hooks/usePeerConnection"
 import { getPlayerProfile, getUserSettings, saveUserSettings } from "@/lib/storage"
@@ -27,6 +29,7 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false)
   const [isOnlineModalOpen, setIsOnlineModalOpen] = useState(false)
   const [isGameOverModalOpen, setIsGameOverModalOpen] = useState(false)
+  const [isLoadModalOpen, setIsLoadModalOpen] = useState(false)
 
   // Online Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
@@ -162,29 +165,33 @@ export default function App() {
   const topColor: Color = isPlayingAsBlack ? "w" : "b"
   const bottomColor: Color = isPlayingAsBlack ? "b" : "w"
 
-  const topPlayerName =
-    game.gameMode === "vs-computer"
-      ? BOT_CONFIGS[game.botDifficulty].name
-      : game.gameMode === "online"
-      ? peer.opponentName
-      : isPlayingAsBlack
-      ? "White"
-      : "Black"
+  const isAnalysis = game.gameMode === "analysis"
+
+  const topPlayerName = isAnalysis
+    ? "Analysis Board"
+    : game.gameMode === "vs-computer"
+    ? BOT_CONFIGS[game.botDifficulty].name
+    : game.gameMode === "online"
+    ? peer.opponentName
+    : isPlayingAsBlack
+    ? "White"
+    : "Black"
 
   const topPlayerRating =
-    game.gameMode === "vs-computer"
+    !isAnalysis && game.gameMode === "vs-computer"
       ? BOT_CONFIGS[game.botDifficulty].rating
       : undefined
 
-  const bottomPlayerName =
-    game.gameMode === "pass-and-play"
-      ? isPlayingAsBlack
-        ? "Black"
-        : "White"
-      : profile.nickname
+  const bottomPlayerName = isAnalysis
+    ? "Interactive Engine"
+    : game.gameMode === "pass-and-play"
+    ? isPlayingAsBlack
+      ? "Black"
+      : "White"
+    : profile.nickname
 
   const bottomPlayerRating =
-    game.gameMode !== "pass-and-play" ? profile.stats.rating : undefined
+    !isAnalysis && game.gameMode !== "pass-and-play" ? profile.stats.rating : undefined
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-zinc-800 selection:text-zinc-100">
@@ -214,7 +221,7 @@ export default function App() {
             <div className="space-y-1">
               <GameClock
                 seconds={topColor === "w" ? game.whiteTime : game.blackTime}
-                isActive={game.turn === topColor && !game.gameResult}
+                isActive={game.turn === topColor && !game.gameResult && !isAnalysis}
                 playerName={topPlayerName}
                 playerColor={topColor}
                 rating={topPlayerRating}
@@ -262,7 +269,7 @@ export default function App() {
               />
               <GameClock
                 seconds={bottomColor === "w" ? game.whiteTime : game.blackTime}
-                isActive={game.turn === bottomColor && !game.gameResult}
+                isActive={game.turn === bottomColor && !game.gameResult && !isAnalysis}
                 playerName={bottomPlayerName}
                 playerColor={bottomColor}
                 rating={bottomPlayerRating}
@@ -270,27 +277,46 @@ export default function App() {
             </div>
           </div>
 
-          {/* 3. Right Sidebar: Move History & Controls */}
+          {/* 3. Right Sidebar: Move History & Controls/Analysis Panel */}
           <div className="flex flex-col gap-4 w-full max-w-[620px] lg:max-w-[360px] mx-auto lg:h-[620px]">
             <div className="flex-1 min-h-[260px]">
-              <MoveHistory moves={game.moveHistory} fen={game.fen} />
+              <MoveHistory
+                moves={game.moveHistory}
+                fen={game.fen}
+                currentIndex={game.currentHistoryIndex}
+                onGoToMove={game.goToMove}
+                onStepMove={game.stepMove}
+              />
             </div>
 
-            <GameControls
-              gameMode={game.gameMode}
-              botDifficulty={game.botDifficulty}
-              onSelectDifficulty={(lvl) => game.setBotDifficulty(lvl)}
-              isCheck={game.isCheck}
-              turn={game.turn}
-              onFlipBoard={handleFlipBoard}
-              onResign={handleResign}
-              onOfferDraw={handleOfferDraw}
-              onNewGame={handleNewGame}
-              isOnline={game.gameMode === "online"}
-              chatMessages={chatMessages}
-              onSendChat={handleSendChat}
-              opponentName={peer.opponentName}
-            />
+            {isAnalysis ? (
+              <AnalysisPanel
+                fen={game.fen}
+                turn={game.turn}
+                evalScore={game.evalScore}
+                isCheck={game.isCheck}
+                onFlipBoard={handleFlipBoard}
+                onReset={() => game.resetGame("analysis")}
+                onOpenLoadModal={() => setIsLoadModalOpen(true)}
+                onPlayMove={(from, to) => game.handleMoveAttempt(from as any, to as any)}
+              />
+            ) : (
+              <GameControls
+                gameMode={game.gameMode}
+                botDifficulty={game.botDifficulty}
+                onSelectDifficulty={(lvl) => game.setBotDifficulty(lvl)}
+                isCheck={game.isCheck}
+                turn={game.turn}
+                onFlipBoard={handleFlipBoard}
+                onResign={handleResign}
+                onOfferDraw={handleOfferDraw}
+                onNewGame={handleNewGame}
+                isOnline={game.gameMode === "online"}
+                chatMessages={chatMessages}
+                onSendChat={handleSendChat}
+                opponentName={peer.opponentName}
+              />
+            )}
           </div>
         </div>
       </main>
@@ -322,6 +348,13 @@ export default function App() {
           game.setGameMode("online")
           peer.joinRoom(code)
         }}
+      />
+
+      {/* Load FEN or PGN Modal */}
+      <LoadPositionModal
+        isOpen={isLoadModalOpen}
+        onClose={() => setIsLoadModalOpen(false)}
+        onLoad={game.loadPosition}
       />
 
       {/* Game Over Modal */}

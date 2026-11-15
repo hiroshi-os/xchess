@@ -102,7 +102,6 @@ export function useChessGame({
       }
     }
 
-    // Pieces captured by White (meaning Black lost them)
     const pieceOrder: PieceSymbol[] = ["q", "r", "b", "n", "p"]
     const values: Record<PieceSymbol, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 }
     let whiteMaterial = 0
@@ -162,9 +161,9 @@ export function useChessGame({
     return false
   }, [chess, userColor])
 
-  // Timer Tick
+  // Timer Tick (active in vs-computer, pass-and-play, online, but NOT analysis)
   useEffect(() => {
-    if (initialSeconds === 0 || gameResult) {
+    if (initialSeconds === 0 || gameResult || gameMode === "analysis") {
       if (timerRef.current) clearInterval(timerRef.current)
       return
     }
@@ -194,7 +193,7 @@ export function useChessGame({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
     }
-  }, [chess, gameResult, initialSeconds])
+  }, [chess, gameMode, gameResult, initialSeconds])
 
   // Make Move
   const executeMove = useCallback(
@@ -219,13 +218,14 @@ export function useChessGame({
           sounds.playMove()
         }
 
-        setFen(chess.fen())
+        const newFen = chess.fen()
+        setFen(newFen)
         setLastMove({ from, to })
         setSelectedSquare(null)
         setLegalMoves([])
         setEvalScore(evaluateBoard(chess))
 
-        // Record history
+        // Record history (branch if in the past)
         const newRecord: MoveRecord = {
           san: move.san,
           from,
@@ -234,13 +234,18 @@ export function useChessGame({
           color: move.color,
           captured: move.captured,
           promotion: move.promotion,
-          fen: chess.fen(),
+          fen: newFen,
         }
 
-        setMoveHistory((prev) => [...prev, newRecord])
+        setMoveHistory((prev) => {
+          const base = currentHistoryIndex >= 0 && currentHistoryIndex < prev.length - 1
+            ? prev.slice(0, currentHistoryIndex + 1)
+            : prev
+          return [...base, newRecord]
+        })
         setCurrentHistoryIndex((prev) => prev + 1)
 
-        // Notify callback (e.g. for peer connection)
+        // Notify callback
         onMoveMade?.({ from, to, promotion: move.promotion })
 
         evaluateGameEnd()
@@ -249,7 +254,92 @@ export function useChessGame({
         return false
       }
     },
-    [chess, evaluateGameEnd, onMoveMade]
+    [chess, currentHistoryIndex, evaluateGameEnd, onMoveMade]
+  )
+
+  // Navigate through move history (essential for Analysis mode)
+  const goToMove = useCallback(
+    (index: number) => {
+      if (index < -1 || index >= moveHistory.length) return
+      setCurrentHistoryIndex(index)
+
+      if (index === -1) {
+        chess.reset()
+        setFen(chess.fen())
+        setLastMove(null)
+        setEvalScore(0)
+      } else {
+        const record = moveHistory[index]
+        chess.load(record.fen)
+        setFen(record.fen)
+        setLastMove({ from: record.from, to: record.to })
+        setEvalScore(evaluateBoard(chess))
+      }
+      setSelectedSquare(null)
+      setLegalMoves([])
+    },
+    [chess, moveHistory]
+  )
+
+  const stepMove = useCallback(
+    (delta: number) => {
+      const target = currentHistoryIndex + delta
+      if (target >= -1 && target < moveHistory.length) {
+        goToMove(target)
+      }
+    },
+    [currentHistoryIndex, goToMove, moveHistory.length]
+  )
+
+  // Load Custom Position (FEN or PGN)
+  const loadPosition = useCallback(
+    (input: string): boolean => {
+      const trimmed = input.trim()
+      if (!trimmed) return false
+
+      // Try as FEN
+      try {
+        const testChess = new Chess()
+        testChess.load(trimmed)
+        chess.load(trimmed)
+        setFen(chess.fen())
+        setSelectedSquare(null)
+        setLegalMoves([])
+        setLastMove(null)
+        setMoveHistory([])
+        setCurrentHistoryIndex(-1)
+        setEvalScore(evaluateBoard(chess))
+        setGameResult(null)
+        return true
+      } catch {
+        // Try as PGN
+        try {
+          const pgnChess = new Chess()
+          pgnChess.loadPgn(trimmed)
+          chess.loadPgn(trimmed)
+          setFen(chess.fen())
+          const history = pgnChess.history({ verbose: true })
+          const records: MoveRecord[] = history.map((m) => ({
+            san: m.san,
+            from: m.from as Square,
+            to: m.to as Square,
+            piece: m.piece,
+            color: m.color,
+            captured: m.captured,
+            promotion: m.promotion,
+            fen: chess.fen(),
+          }))
+          setMoveHistory(records)
+          setCurrentHistoryIndex(records.length - 1)
+          setEvalScore(evaluateBoard(chess))
+          setGameResult(null)
+          return true
+        } catch {
+          return false
+        }
+      }
+    },
+    [chess]
   )
 
   // Bot Turn Trigger
@@ -289,7 +379,7 @@ export function useChessGame({
     }
   }, [chess, executeMove, fen, gameResult, premove, userColor])
 
-  // Move Attempt (used for Drag & Drop and Instant Moves)
+  // Move Attempt (Drag & Drop)
   const handleMoveAttempt = useCallback(
     (from: Square, to: Square) => {
       if (gameResult) return
@@ -297,8 +387,8 @@ export function useChessGame({
       const piece = chess.get(from)
       if (!piece) return
 
-      // If it's user's turn (or pass and play)
-      if (gameMode === "pass-and-play" || chess.turn() === userColor) {
+      // In analysis mode or pass-and-play, or if it's our turn
+      if (gameMode === "analysis" || gameMode === "pass-and-play" || chess.turn() === userColor) {
         const moves = chess.moves({ square: from, verbose: true })
         const move = moves.find((m) => m.to === to)
         if (move) {
@@ -331,12 +421,11 @@ export function useChessGame({
     (square: Square) => {
       if (gameResult) return
 
-      // If clicking with a premove active, cancel premove unless clicking target
       if (premove) {
         setPremove(null)
       }
 
-      // If it's opponent's turn, allow selecting own piece for premove
+      // If it's opponent's turn in vs-computer
       if (gameMode === "vs-computer" && chess.turn() !== userColor) {
         const piece = chess.get(square)
         if (piece && piece.color === userColor) {
@@ -345,7 +434,6 @@ export function useChessGame({
             setLegalMoves([])
           } else {
             setSelectedSquare(square)
-            // Generate pseudo-legal destination indicators
             const allSquares: Square[] = []
             const files = ["a", "b", "c", "d", "e", "f", "g", "h"]
             for (let r = 1; r <= 8; r++) {
@@ -357,13 +445,12 @@ export function useChessGame({
             setLegalMoves(allSquares)
           }
         } else if (selectedSquare) {
-          // Queue premove
           handleMoveAttempt(selectedSquare, square)
         }
         return
       }
 
-      // If a square is already selected on our turn
+      // If a square is already selected
       if (selectedSquare) {
         if (selectedSquare === square) {
           setSelectedSquare(null)
@@ -377,9 +464,9 @@ export function useChessGame({
         }
       }
 
-      // Check if clicking own piece on our turn
+      // Check if clicking moving side's piece
       const piece = chess.get(square)
-      if (piece && (gameMode === "pass-and-play" || piece.color === chess.turn())) {
+      if (piece && (gameMode === "analysis" || gameMode === "pass-and-play" || piece.color === chess.turn())) {
         setSelectedSquare(square)
         const moves = chess.moves({ square, verbose: true })
         setLegalMoves(moves.map((m) => m.to as Square))
@@ -391,14 +478,12 @@ export function useChessGame({
     [chess, gameMode, gameResult, handleMoveAttempt, legalMoves, premove, selectedSquare, userColor]
   )
 
-  // Cancel Premove
   const cancelPremove = useCallback(() => {
     setPremove(null)
     setSelectedSquare(null)
     setLegalMoves([])
   }, [])
 
-  // Promotion choice
   const confirmPromotion = useCallback(
     (piece: PieceSymbol) => {
       if (pendingPromotion) {
@@ -415,7 +500,6 @@ export function useChessGame({
     setLegalMoves([])
   }, [])
 
-  // Resign
   const resign = useCallback(
     (color: Color) => {
       const winner = color === "w" ? "b" : "w"
@@ -431,14 +515,12 @@ export function useChessGame({
     [userColor]
   )
 
-  // Agree Draw
   const agreeDraw = useCallback(() => {
     setGameResult({ outcome: "draw_agreement", winner: null })
     sounds.playDefeat()
     recordGameResult("draw")
   }, [])
 
-  // Reset Game
   const resetGame = useCallback(
     (newMode?: GameMode, newDifficulty?: BotDifficulty, newColor?: Color) => {
       chess.reset()
@@ -490,6 +572,9 @@ export function useChessGame({
     setUserColor,
     handleSquareClick,
     handleMoveAttempt,
+    goToMove,
+    stepMove,
+    loadPosition,
     cancelPremove,
     executeMove,
     confirmPromotion,
