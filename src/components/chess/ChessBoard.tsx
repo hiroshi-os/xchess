@@ -28,6 +28,68 @@ interface DragInfo {
   isDragging: boolean
 }
 
+function getSquareCenter(square: Square, isFlipped: boolean): { x: number; y: number } {
+  const file = square.charCodeAt(0) - 97 // 0..7
+  const rank = parseInt(square[1], 10) // 1..8
+
+  const col = isFlipped ? 7 - file : file
+  const row = isFlipped ? rank - 1 : 8 - rank
+
+  return {
+    x: col * 100 + 50,
+    y: row * 100 + 50,
+  }
+}
+
+function getArrowPath(from: Square, to: Square, isFlipped: boolean): string {
+  const p1 = getSquareCenter(from, isFlipped)
+  const p2 = getSquareCenter(to, isFlipped)
+
+  const dx = p2.x - p1.x
+  const dy = p2.y - p1.y
+  const len = Math.hypot(dx, dy)
+  if (len === 0) return ""
+
+  const ux = dx / len
+  const uy = dy / len
+  const px = -uy
+  const py = ux
+
+  const shaftWidth = 14
+  const headWidth = 32
+  const headLength = 28
+  const tipOffset = 18
+
+  const startX = p1.x + ux * 14
+  const startY = p1.y + uy * 14
+
+  const endX = p2.x - ux * tipOffset
+  const endY = p2.y - uy * tipOffset
+
+  const neckX = endX - ux * headLength
+  const neckY = endY - uy * headLength
+
+  const pLeftShaft = { x: startX - px * (shaftWidth / 2), y: startY - py * (shaftWidth / 2) }
+  const pRightShaft = { x: startX + px * (shaftWidth / 2), y: startY + py * (shaftWidth / 2) }
+
+  const pLeftNeck = { x: neckX - px * (shaftWidth / 2), y: neckY - py * (shaftWidth / 2) }
+  const pRightNeck = { x: neckX + px * (shaftWidth / 2), y: neckY + py * (shaftWidth / 2) }
+
+  const pLeftHead = { x: neckX - px * (headWidth / 2), y: neckY - py * (headWidth / 2) }
+  const pRightHead = { x: neckX + px * (headWidth / 2), y: neckY + py * (headWidth / 2) }
+
+  return `
+    M ${pLeftShaft.x.toFixed(1)} ${pLeftShaft.y.toFixed(1)}
+    L ${pLeftNeck.x.toFixed(1)} ${pLeftNeck.y.toFixed(1)}
+    L ${pLeftHead.x.toFixed(1)} ${pLeftHead.y.toFixed(1)}
+    L ${endX.toFixed(1)} ${endY.toFixed(1)}
+    L ${pRightHead.x.toFixed(1)} ${pRightHead.y.toFixed(1)}
+    L ${pRightNeck.x.toFixed(1)} ${pRightNeck.y.toFixed(1)}
+    L ${pRightShaft.x.toFixed(1)} ${pRightShaft.y.toFixed(1)}
+    Z
+  `
+}
+
 export const ChessBoard: React.FC<ChessBoardProps> = ({
   board,
   orientation = "w",
@@ -46,6 +108,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
 }) => {
   const boardRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragInfo | null>(null)
+  const rightDragRef = useRef<{ startSquare: Square; startX: number; startY: number } | null>(null)
 
   const [activeDrag, setActiveDrag] = useState<{
     piece: { type: PieceSymbol; color: Color }
@@ -56,6 +119,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
   } | null>(null)
 
   const [hoverSquare, setHoverSquare] = useState<Square | null>(null)
+  const [userArrows, setUserArrows] = useState<{ from: Square; to: Square }[]>([])
 
   const isFlipped = orientation === "b"
   const ranks = isFlipped ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
@@ -90,9 +154,26 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
     square: Square,
     piece: { type: PieceSymbol; color: Color } | null
   ) => {
-    if (disabled || e.button !== 0) return
+    if (disabled) return
 
-    // Check if player can interact with this piece
+    // Right-click drag to draw analysis / tactical arrows
+    if (e.button === 2) {
+      e.preventDefault()
+      rightDragRef.current = {
+        startSquare: square,
+        startX: e.clientX,
+        startY: e.clientY,
+      }
+      return
+    }
+
+    if (e.button !== 0) return
+
+    // Left click clears custom user arrows
+    if (userArrows.length > 0) {
+      setUserArrows([])
+    }
+
     const isPlayerTurn = gameMode === "pass-and-play" || turn === userColor
     const canInteract =
       piece &&
@@ -107,55 +188,82 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
         isDragging: false,
       }
 
-      // Also trigger selection on pointer down for immediate legal move display
       onSquareClick(square)
     } else {
-      // Clicking empty square or opponent piece
       onSquareClick(square)
     }
   }
 
-  // Window Pointer Listeners for flawless continuous dragging across the screen
+  // Window Pointer Listeners
   useEffect(() => {
     const handlePointerMove = (e: PointerEvent) => {
-      if (!dragRef.current) return
+      if (dragRef.current) {
+        const dx = e.clientX - dragRef.current.startX
+        const dy = e.clientY - dragRef.current.startY
+        const dist = Math.hypot(dx, dy)
 
-      const dx = e.clientX - dragRef.current.startX
-      const dy = e.clientY - dragRef.current.startY
-      const dist = Math.hypot(dx, dy)
+        if (dist > 4) {
+          dragRef.current.isDragging = true
+          const squareSize = boardRef.current
+            ? boardRef.current.clientWidth / 8
+            : 64
 
-      if (dist > 4) {
-        dragRef.current.isDragging = true
-        const squareSize = boardRef.current
-          ? boardRef.current.clientWidth / 8
-          : 64
+          setActiveDrag({
+            piece: dragRef.current.piece,
+            fromSquare: dragRef.current.fromSquare,
+            x: e.clientX,
+            y: e.clientY,
+            size: squareSize,
+          })
 
-        setActiveDrag({
-          piece: dragRef.current.piece,
-          fromSquare: dragRef.current.fromSquare,
-          x: e.clientX,
-          y: e.clientY,
-          size: squareSize,
-        })
-
-        const sq = getSquareFromCoords(e.clientX, e.clientY)
-        setHoverSquare(sq)
+          const sq = getSquareFromCoords(e.clientX, e.clientY)
+          setHoverSquare(sq)
+        }
       }
     }
 
     const handlePointerUp = (e: PointerEvent) => {
-      if (!dragRef.current) return
-
-      if (dragRef.current.isDragging) {
+      // Handle Right-click arrow release
+      if (e.button === 2 && rightDragRef.current) {
         const targetSquare = getSquareFromCoords(e.clientX, e.clientY)
-        if (targetSquare && targetSquare !== dragRef.current.fromSquare) {
-          onMoveAttempt(dragRef.current.fromSquare, targetSquare)
+        if (targetSquare && targetSquare !== rightDragRef.current.startSquare) {
+          setUserArrows((prev) => {
+            const exists = prev.some(
+              (a) =>
+                a.from === rightDragRef.current!.startSquare &&
+                a.to === targetSquare
+            )
+            if (exists) {
+              return prev.filter(
+                (a) =>
+                  !(
+                    a.from === rightDragRef.current!.startSquare &&
+                    a.to === targetSquare
+                  )
+              )
+            }
+            return [
+              ...prev,
+              { from: rightDragRef.current!.startSquare, to: targetSquare },
+            ]
+          })
         }
+        rightDragRef.current = null
       }
 
-      dragRef.current = null
-      setActiveDrag(null)
-      setHoverSquare(null)
+      // Handle Left-click piece drop
+      if (dragRef.current) {
+        if (dragRef.current.isDragging) {
+          const targetSquare = getSquareFromCoords(e.clientX, e.clientY)
+          if (targetSquare && targetSquare !== dragRef.current.fromSquare) {
+            onMoveAttempt(dragRef.current.fromSquare, targetSquare)
+          }
+        }
+
+        dragRef.current = null
+        setActiveDrag(null)
+        setHoverSquare(null)
+      }
     }
 
     window.addEventListener("pointermove", handlePointerMove)
@@ -167,7 +275,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
     }
   }, [getSquareFromCoords, onMoveAttempt])
 
-  // Right Click cancels pre-drag or premove
+  // Context Menu: prevents OS popup and cancels active premove or arrows
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     if (activeDrag) {
@@ -227,19 +335,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                 onPointerDown={(e) => handlePointerDown(e, squareName, piece)}
                 className={cn(
                   "relative flex items-center justify-center transition-colors cursor-pointer select-none",
-                  // Shadcn Zinc refined board palette
                   isDarkSquare
                     ? "bg-zinc-800 hover:bg-zinc-750"
                     : "bg-zinc-600 hover:bg-zinc-550",
-                  // Selected square highlight
                   isSelected && "bg-emerald-600/50 ring-2 ring-emerald-400 inset-0 z-10",
-                  // Hover highlight while dragging piece over this square
                   isHoveredDuringDrag && "bg-emerald-500/30 ring-2 ring-emerald-400/90 z-20",
-                  // Premove highlights (Chess.com style coral-red)
-                  isPremoveSquare && "bg-rose-500/30 ring-2 ring-rose-400/80 z-10 animate-pulse",
-                  // Last move highlights
+                  isPremoveSquare && "bg-rose-500/25 ring-2 ring-rose-400/80 z-10",
                   (isLastMoveFrom || isLastMoveTo) && !isSelected && !isPremoveSquare && "bg-amber-500/25",
-                  // Checked king warning
                   isKingInCheck && "bg-rose-500/40 ring-2 ring-rose-500 animate-pulse z-10"
                 )}
               >
@@ -274,7 +376,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                       "absolute size-3.5 rounded-full pointer-events-none transition-transform transform scale-100 animate-in fade-in zoom-in",
                       isPlayerTurn
                         ? "bg-emerald-400/60"
-                        : "bg-rose-400/50" // Pre-drag / premove pseudo indicators
+                        : "bg-rose-400/50"
                     )}
                   />
                 )}
@@ -291,7 +393,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                   />
                 )}
 
-                {/* Static Piece on Square (dimmed if actively dragging it) */}
+                {/* Static Piece on Square */}
                 {piece && (
                   <div
                     className={cn(
@@ -308,7 +410,51 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
         )}
       </div>
 
-      {/* Floating Active Dragged Piece (follows cursor directly with zero OS ghosting) */}
+      {/* SVG Arrow Overlay (Premove arrows & Tactical arrows) */}
+      <svg
+        className="absolute inset-0 size-full pointer-events-none z-30"
+        viewBox="0 0 800 800"
+      >
+        {/* Premove Arrow (Chess.com Vibrant Coral/Red Glow) */}
+        {premove && (
+          <g className="animate-in fade-in zoom-in-95 duration-150">
+            <circle
+              cx={getSquareCenter(premove.from, isFlipped).x}
+              cy={getSquareCenter(premove.from, isFlipped).y}
+              r="10"
+              fill="#f43f5e"
+              opacity="0.9"
+            />
+            <path
+              d={getArrowPath(premove.from, premove.to, isFlipped)}
+              fill="#f43f5e"
+              opacity="0.88"
+              className="filter drop-shadow-[0_2px_8px_rgba(244,63,94,0.7)]"
+            />
+          </g>
+        )}
+
+        {/* User Drawn Arrows (Right-click and drag) */}
+        {userArrows.map((arrow, idx) => (
+          <g key={idx} className="animate-in fade-in duration-100">
+            <circle
+              cx={getSquareCenter(arrow.from, isFlipped).x}
+              cy={getSquareCenter(arrow.from, isFlipped).y}
+              r="8"
+              fill="#10b981"
+              opacity="0.85"
+            />
+            <path
+              d={getArrowPath(arrow.from, arrow.to, isFlipped)}
+              fill="#10b981"
+              opacity="0.8"
+              className="filter drop-shadow-[0_2px_6px_rgba(16,185,129,0.5)]"
+            />
+          </g>
+        ))}
+      </svg>
+
+      {/* Floating Active Dragged Piece */}
       {activeDrag && (
         <div
           className="fixed pointer-events-none z-50 select-none -translate-x-1/2 -translate-y-1/2 drop-shadow-2xl cursor-grabbing"
